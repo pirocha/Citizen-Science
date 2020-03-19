@@ -1,0 +1,650 @@
+---
+title: 'R code for the manucript "Reliability of citizen scientists’ identification
+  features"'
+  of camera-trapping images: evaluating misidentification rates and the role environmental
+author: "Filipe Rocha"
+date: "11/03/2020"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Load the Required Packages
+
+```{r}
+library(readxl)
+library(readr)
+library(plyr)
+library(Amelia)
+library(gdata)
+require(multcomp)#compara?oes multiplas
+require(lmerTest)#p values em glmm
+library(lme4)
+library(MASS)
+library(car)
+library(MuMIn)
+library(AICcmodavg)
+library(gplots)
+library(ggplot2)
+library(ggstance)
+library(dplyr)
+library(stats)
+
+```
+
+### Set the working directory and import the data sets
+```{r}
+
+setwd("~/GitHub/CIBIO_Angola/CitizenScience/")
+cs_errors <- read.csv("~/GitHub/CIBIO_Angola/CitizenScience/data.csv", sep = ";") %>%
+  select(c('error','vegetation','time','species')) %>%
+  droplevels(exclude = c("Aardvark","Hare","Jackal","Pangolin","Reptile","Rodent","Vulture","Wild Cat"))
+
+cs_errors$species <- relevel(cs_errors$species,"Elephant")
+
+#data cleaning
+sapply(cs_errors, function(x) sum(is.na(x)))
+
+sapply(cs_errors, function(x) length(unique(x)))
+
+missmap(cs_errors, main = "Missing values vs observed")
+
+```
+
+
+# Modelling the Presence/Absence of Mistakes  
+
+###There are no missing values in the dataset. So I don't need to discard any variable. Although image_id isn't needed for the analisys, so
+
+```{r}
+
+#models
+
+full.model <- glm(error ~ species*time*vegetation, family = binomial(link = 'logit'), data = cs_errors, na.action = "na.fail")
+ 
+model.dredge <- dredge(full.model, beta = FALSE, evaluate = TRUE, rank = "AIC")
+model.dredge
+
+model <- glm(error ~ species + time + vegetation + species*time + time*vegetation, family = binomial(link = 'logit'), data = cs_errors, na.action = "na.fail")
+(sum.model <- summary(model))
+
+
+# Analisys of the table of deviance
+anova(model, test = "Chisq")   
+
+library(pscl)
+pR2(model)  
+
+```
+
+# Plot model estimate
+```{r}
+beta <- sum.model$coefficients
+CI <- confint(model)
+L <- CI[,1]
+U <- CI[,2]
+names <- c("(Intercept)", "Baboon", "Bird (other)", "Buffalo", "Bushbuck", "Bushpig", "Civet", "Duiker", "Genet", "Hippopotamus",
+           "Honey Badger", "Impala", "Kudu", "Mongoose", "Nyala", "Oribi", "Porcupine", "Reedbuck", "Sable Antelope", "Samango Monkey",
+           "Serval", "Vervet Monkey", "Warthog", "Waterbuck", "night", "Limestone Gorge", "Miombo Woodland", 
+           "Mixed Savanna and Woodland", "Baboon*night", "Bird (other)*night", "Buffalo*night", "Bushbuck*night", "Bushpig*night",
+           "Civet*night", "Duiker*night", "Genet*night", "Hippopotamus*night", "Honey Badger*night", "Impala*night", "Kudu*night",
+           "Mongoose*night", "Nyala*night", "Oribi*night", "Porcupine*night", "Reedbuck*night", "Sable Antelope*night","Serval*night",
+           "Warthog*night", "Waterbuck*night", "night*Limestone Gorge", "night*Miombo Woodland", "night*Mixed Savanna and Woodland")
+
+L <- L[-c(47, 49)]
+U <- U[-c(47, 49)]
+
+beta.ci <- data.frame(names,beta,L,U)
+beta.ci <- beta.ci[-c(1),]
+
+beta.ci <- subset(beta.ci, Pr...z..< 0.05)
+beta <- beta.ci$Estimate
+L <- beta.ci$L
+U <- beta.ci$U
+
+plotCI(beta, ui=U, li=L)
+
+
+```
+
+
+
+
+
+
+# Number of Specimens Misidentified
+```{r}
+
+cs_nerrors<- read.csv("~/GitHub/CIBIO_Angola/CitizenScience/data.csv", header = T, sep = ";") %>%
+  select(c(5,8,9,12:16)) %>%
+  droplevels(exclude = c("Aardvark","Hare","Jackal","Pangolin","Reptile","Rodent","Vulture","Wild Cat")) %>%
+  rename(log.sum_n_error = log.sum_error..1) %>%
+  mutate(vegetation = as.factor(vegetation),
+         time = as.factor(time),
+         species = as.factor(species),
+         greg = as.factor(greg),
+         log.sum_n_error = as.double(log.sum_n_error))
+
+cs_nerrors$species <- relevel(cs_nerrors$species,"Bushbuck")
+cs_nerrors$greg <- relevel(cs_nerrors$greg,"0")
+
+#Data cleaning
+sapply(cs_nerrors, function(x) sum(is.na(x)))
+cs_nerrors <- na.omit(cs_nerrors)
+sapply(cs_nerrors, function(x) sum(is.na(x)))
+
+sapply(cs_nerrors, function(x) length(unique(x)))
+
+missmap(cs_nerrors, main = "Missing values vs observed")
+
+```
+
+
+
+### models
+```{r}
+
+
+full.glm <- glm(log.sum_n_error ~ species*time*vegetation*greg, family = gaussian, data = cs_nerrors, na.action = "na.fail")
+summary(full.glm)
+# out <- capture.output(summary(full.glm))
+# cat("full.glm", out, file="summary_full.glm.txt", sep="\n", append=FALSE)
+
+
+full.glm.dredge <- dredge(full.glm, beta = FALSE, evaluate = TRUE, rank = "AIC")
+full.glm.dredge
+
+write.table(x = full.glm.dredge, file = "full.glm.dredge.txt", sep = "\t")
+
+(avg.glm <- model.avg(full.glm.dredge, beta=TRUE, rank=AIC, fit = TRUE)) ##faz o "modelo medio" usado valores de delta iguais ou inf
+(sum.avg.glm <- summary(avg.glm))
+
+(CI.glm <- confint(avg.glm))
+
+
+```
+
+
+###  Plot Estimates
+```{r}
+
+library(tidyr)
+
+ beta.glm <- read.csv("beta_GLM.csv", sep = ";") %>%
+   mutate(Estimate = as.numeric(Estimate),
+          CI2.5 = as.numeric(CI2.5),
+          CI97.5 = as.numeric(CI97.5))
+
+ls.str(beta.glm)
+
+
+(k <- ggplot(beta.glm, aes(x = factor(Interact, levels = unique(Interact) ), y = Estimate, abline(y = 1.0), group = Model, color = Model)) +  
+     geom_hline(yintercept = 0) +
+     geom_pointrange(aes(ymin = Estimate-CI2.5, ymax = Estimate+CI97.5), position = position_dodge(width = 0.6), na.rm=TRUE) +
+     theme_classic(base_size = 11, base_family = "") +
+     ylab(expression(beta.glm)) + theme(legend.position = "bottom") + 
+     theme(axis.text.x = element_text(angle = 90, vjust=0.5)))
+
+```
+
+
+### Tornado Chart: Number of errors (False Positives & Negatives)
+```{r}
+
+library(plotrix)
+
+tornado <- read.csv("tornado.csv", sep = ";")
+
+falneg <- tornado$perc.fn
+fal_pos <- tornado$perc.fp
+splabels <- tornado$Species
+fncol <- gray.colors(start = 0.6, end = 0.6, n = 1)
+fpcol <- gray.colors(start = 0.3, end = 0.3, n = 1)
+par(mar=pyramid.plot(falneg,fal_pos,labels=splabels,
+                     top.labels = c("False Negatives", "Species", "False Positives"), xlim = c(1.0, 1.0), 
+                     laxlab = seq(from = 0, to = 1.0, by = 0.25),
+                     raxlab=seq(from = 0, to = 1.0, by = 0.25),  
+                     lxcol=fncol,rxcol=fpcol,
+                     gap=0.2, show.values=FALSE))
+
+```
+
+
+### ChordDiagram: Plot the proportion of records wrongly assigned to a species, and the proporsion of the most frequent confusions
+```{r}
+
+herbivores <- read.table("herbivores.txt", skip=2, stringsAsFactors=FALSE)
+
+#select and rename labels
+library("dplyr")
+data <- herbivores %>% select(1:3) %>% 
+  rename(order = V1, 
+         rgb = V2, 
+         species = V3) %>% 
+  mutate(species = gsub("_", " ", species))
+
+#flow matrix
+m <- as.matrix(herbivores[,-(1:3)]/1e06)
+dimnames(m) <- list(orig = data$species, dest = data$species)
+#drop small flows
+m[m<=quantile(m,0.65)]<-0
+
+#sort species and create colours
+library("tidyr")
+data <- data %>% 
+  arrange(order) %>% 
+  separate(rgb, c("r","g","b")) %>% 
+  mutate(col = rgb(r, g, b, max=255), 
+         max = rowSums(m)+colSums(m))
+
+#plot using chordDiagram
+library("circlize")
+circos.clear()
+par(mar = rep(0, 4), cex=0.9)
+circos.par(start.degree = 90, gap.degree = 4)
+chordDiagram(x = m, directional = 1, direction.type = c("arrows"), order = data$species, 
+             grid.col = data$col, annotationTrack = "grid", 
+             transparency = 0.25,  annotationTrackHeight = c(0.1, 0.1),
+             diffHeight  = -0.05)
+
+
+#add in labels and axis
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+  xlim = get.cell.meta.data("xlim")
+  sector.index = get.cell.meta.data("sector.index")
+  circos.text(mean(xlim), 2.5, sector.index, facing = "bending")
+  circos.axis("top", major.at = seq(0, max(xlim)), minor.ticks=1, labels.away.percentage = 0.2, labels.niceFacing = FALSE )
+}, bg.border = NA)
+circos.clear()
+
+
+```
+
+
+# Code for the estimation of the required number of records to accuratly know the crowdsourcing misidentification rate
+
+### Organize the data for the analysis.
+```{r}
+
+allspecies <- cs_errors <- read.csv("~/GitHub/CIBIO_Angola/CitizenScience/data.csv", sep = ";") %>%
+  select(c("image_id", "error", "false_pos", "false_neg",  "species")) %>%
+  mutate(n = (1:length(image_id))) %>%
+  filter(species != "Aardvark",          
+         species != "Eland",
+         species != "Ground Hornbill",
+         species != "Pangolin",
+         species != "Hare",
+         species != "Hartebeest",
+         species != "Jackal",
+         species != "Lion",
+         species != "Raptor (other)",
+         species != "Reptile",
+         species != "Rodent",
+         species != "Vulture",
+         species != "Wild Cat",
+         species != "Wildebeest",
+         species != "Zebra")
+
+max <- length(allspecies$n)
+rmax <- 1000 
+i <- as.integer()
+j <- as.integer()
+n2 <- seq.int(nrow(allspecies))
+int <- data.frame(n2)
+erros <- matrix(NA,nrow(allspecies),ncol = rmax)
+perc <- matrix(NA,nrow(allspecies),ncol = rmax)
+final <- data.frame(n2)
+names <- vector(,length = rmax)
+regression <- data.frame(matrix(vector(), 0, 11,
+                                dimnames=list(c(), c("Rand", "Threshold_Y=0", "perc_Y=0", "B_Y=0", "A_Y=0","p_Y=0", 
+                                                     "Threshold_nonsig", "perc_nonsig", "B_nonsig", "A_nonsig","p_nonsig"))),
+                         stringsAsFactors = F)
+output <- data.frame(matrix(vector(), 0, 5,
+                             dimnames=list(c(), c("n", "B", "A", "AbsoluteA","p"))),
+                      stringsAsFactors = F)
+
+sps <- as.character(unique(allspecies$species))
+
+for (i in 1:length(sps)+1) {
+  ifelse(i <= length(sps), species <- subset(allspecies, allspecies$species == sps[i]), species <- allspecies) 
+
+
+  ## Randomize the data frame
+  
+  for(x in 1:rmax){
+    
+    print(x)
+    
+    set.seed(x)
+    rand <- sample(nrow(species))  #creates a random sequence of numbers from 1 to nrow
+    
+    species <- species[rand, ]      # order the data frame according to random order defined in rand
+    
+    
+    #Create new colums for error and percents
+    erros[1,x] <- species$false_pos[1]+species$false_neg[1]
+    
+    for(i in 2:max){
+      j <- i - 1
+      erros[i,x] <- erros[j,x] + species$false_pos[i] + species$false_neg[i]
+      #    print(c(x, i, errors[i,x]))
+    }
+    int <- cbind(int,erros[,x])
+    int <- transform(int, perc = erros[,x] / n2)
+    perc[,x] <- int$perc
+    final <- cbind(final,perc[,x])
+  }
+  
+  
+  ## Linear Regression
+
+  for(x in 501:600){
+    for(i in 1:(max-1)){
+      final1 <- subset(final, n2>= i)
+      
+      bbmodeln <- lm(final1[ ,(x+1)]~n2, data = final1)
+      coeff <- coefficients((bbmodeln))
+      
+      output[i,1] <- i
+      output[i,2] <- coeff[1]
+      output[i,3] <- coeff[2]
+      output[i,4] <- abs(coeff[2])
+      output[i,5] <- summary(bbmodeln)$coefficients[2,4]
+      
+    }
+    print(x)
+    
+    
+
+    ## Non significant
+
+    
+    test <- 0
+    
+    if (nrow(output)>0){
+      for(y in 1:(length(output$n)-1)){
+        if(output[y,5] > 0.05){
+          test <- test + 1
+        } else{
+          test <- test + 0
+        } 
+      }
+    }
+    
+    if(test == 0){
+      regression[x,1] <- x
+      regression[x,2] <- NA
+      regression[x,3] <- NA
+      regression[x,4] <- NA 
+      regression[x,5] <- NA
+      regression[x,6] <- NA
+      regression[x,7] <- NA
+      regression[x,8] <- NA 
+      regression[x,9] <- NA
+      regression[x,10] <- NA
+      regression[x,11] <- NA
+    }
+    else{
+      
+      
+      sig <- subset(output, p > 0.05)
+      sig <- sig[order(sig$n),]
+      sig_t <- sig[1,1]
+      
+      sig_data <- subset(final, n2 >= sig_t)
+      
+      model.p <- lm(sig_data[,x+1]~n2, data = sig_data)
+      
+      
+
+      ### Crossing Y = 0
+
+      
+      sort_output <- output[order(output$AbsoluteA),]
+      cross_t <- sort_output[1,1]
+      
+      cross0_data <- subset(final, n2 >= cross_t)
+      
+      model.0 <- lm(cross0_data[,x+1]~n2, data = cross0_data)
+      
+      
+      ### Paste results in the table
+      
+      regression[x,1] <- x
+      regression[x,2] <- cross_t
+      regression[x,3] <- cross_t*100/max
+      regression[x,4] <- summary(model.0)$coefficients[2,4]
+      regression[x,5] <- summary(model.0)$coefficients[1,1]
+      regression[x,6] <- summary(model.0)$coefficients[2,1]
+      regression[x,7] <- sig_t
+      regression[x,8] <- sig_t*100/max
+      regression[x,9] <- summary(model.p)$coefficients[2,4]
+      regression[x,10] <- summary(model.p)$coefficients[1,1]
+      regression[x,11] <- summary(model.p)$coefficients[2,1]
+    }
+  
+    regression1 <- regression
+      
+  }
+  
+
+  ## Results Analysis
+  
+  regression <- regression[complete.cases(regression), ]
+  
+ 
+  ### Histogram 
+
+  
+  hist_breaks <- seq(1,length(species$false_neg),1)
+  
+  hist(regression$Threshold_Y.0, breaks = hist_breaks)
+  hist(regression$Threshold_nonsig, breaks = hist_breaks)
+  
+  mean(regression$Threshold_Y.0)
+  
+  
+  bs <- function(formula, data, b) {
+    d <- data[b,] # allows boot to select sample 
+    fit <- lm(Threshold_nonsig~Rand, data=d)
+    return(coef(fit))
+  }
+  
+  
+  ## Bootstrapping
+
+  ### Y = 0
+  
+  library(boot)
+  
+  bs <- function(formula, data, b) {
+    d <- data[b,] # allows boot to select sample 
+    fit <- lm(Threshold_Y.0~Rand, data=d)
+    return(coef(fit))
+  }
+  
+  #### bootstrapping with 1000 replications 
+  results <- boot(data=regression, statistic=bs, 
+                  R=1000, formula=Threshold_Y.0~Rand)
+  
+  #### view results
+  results
+  plot(results, index=1) # intercept 
+  plot(results, index=2) # slope 
+  
+  
+  #### get 95% confidence intervals 
+  boot.ci(results, type="bca", index=1) # intercept 
+  boot.ci(results, type="bca", index=2) # slope
+  
+
+  ### p > 0.05
+
+  
+  
+  bs <- function(formula, data, b) {
+    d <- data[b,] # allows boot to select sample 
+    fit <- lm(Threshold_nonsig~Rand, data=d)
+    return(coef(fit))
+  }
+  
+  #### bootstrapping with 1000 replications 
+  results <- boot(data=regression, statistic=bs, 
+                  R=1000, formula=Threshold_nonsig~Rand)
+  
+  #### view results
+  results
+  plot(results, index=1) # intercept 
+  plot(results, index=2) # slope 
+  
+  
+  #### get 95% confidence intervals 
+  boot.ci(results, type="bca", index=1) # intercept 
+  boot.ci(results, type="bca", index=2) # slope
+
+}
+
+```
+
+
+```{r}
+
+ccr <- read.csv("CumulativeCurveResults.csv", sep = ";", header = TRUE) %>%
+  filter(Species != "Hartebeest",
+         Species != "Wildebeest", 
+         Species != "All species") %>%
+  mutate(log.n = log(n),
+         Species = recode(Species, 'Bird' = 'Bird (other)'))
+
+
+
+# GLM 
+
+m1 <- glm(r_T~n, data = ccr, family = gaussian(link = 'identity'))
+m2 <- glm(r_T~log(n), data = ccr,family = gaussian(link = 'identity'))
+
+require(MuMIn)
+model.sel(m1,m2)
+summary(m2)
+
+#prediction
+x <- seq(0,max(ccr$n),50) 
+x <- data.frame(x)
+colnames(x) <- "n"
+
+yf <- data.frame(predict(m2, type="link", newdata=x, re.form=NA, se.fit=T))
+colnames(yf) <-c("fit","se")
+yf <- yf[-1,]
+yf$fit<- yf$fit
+yf$inf <- yf$fit-1.96*yf$se
+yf$sup <- yf$fit+1.96*yf$se
+yf <- cbind(x[-1,],yf)
+colnames(yf)[1] <- 'n'
+
+
+require(ggplot2)
+(ccr_plot <- ggplot(data = ccr, aes(x = n, y = r_T, ymax = 0.47)) + geom_point() +
+  xlab("Sample Size") + ylab("Relative Threshold")+
+  theme_classic())
+
+(ccr.glm_plot <- ggplot(data = ccr, aes(x = n, y = r_T)) + geom_point() + 
+  geom_ribbon(data=yf, aes(x= n, y = fit, ymin = inf, ymax = sup)) + 
+  geom_line(data = yf, aes(x = n, y = fit)) +
+  xlab("Sample Size") + ylab("Relative Threshold")+
+  theme_classic())
+
+```
+
+## Test of the extrapolation of a subset created with the threshold
+``` {r}
+
+data <- read.csv("~/GitHub/CIBIO_Angola/CitizenScience/data2.csv", sep = ";")
+
+# Clean the data and remove the species that do not enter in the analysis
+data.correct <- data %>%
+  group_by(species_conf) %>%
+  summarize(n = n()) %>% # Count the number of pictures for each species, identified by the expert
+  filter(species_conf != "Aardvark",          
+         species_conf != "Eland",
+         species_conf != "Ground Hornbill",
+         species_conf != "Pangolin",
+         species_conf != "Hare",
+         species_conf != "Hartebeest",
+         species_conf != "Jackal",
+         species_conf != "Lion",
+         species_conf != "Raptor (other)",
+         species_conf != "Reptile",
+         species_conf != "Rodent",
+         species_conf != "Vulture",
+         species_conf != "Wild Cat",
+         species_conf != "Wildebeest",
+         species_conf != "Zebra",
+         species_conf != "Vervet Monkey",
+         species_conf != "Hippopotamus",
+         species_conf != "Honey Badger",
+         species_conf != "Human",
+         species_conf != "Serval",
+         species_conf != "Porcupine")
+
+data.correct.all <- data.correct
+
+## we use a for loop to estimate the number for each species at the time
+for (i in 1:(nrow(ccr)-1)) { 
+  species <- data %>%
+  filter(species_CS == as.character(ccr$Species[i])) %>% # Filter the data to use the target species
+  sample_frac(size = ccr$r_T[i]) %>% # Sample the species records, according to the threshold calculated above
+  group_by(species_conf)%>%
+  summarize(n = n()) %>% 
+  mutate(prop = n/sum(n), # calculate the proportion of the pictures, iniatially assigned as the target species, distributed according the correct species
+         n_correct = as.integer(prop*ccr$n[i])) %>% # estimation of the number of pictures for each species
+  select(c(1,4))
+  
+  data.correct <- data.correct %>%
+    left_join(species, by = "species_conf") # paste the results in a data frame with all the results
+   colnames(data.correct)[(i+2)] <- paste(ccr$Species[i])
+  
+}
+  
+data.correct <- data.correct %>%
+  replace(is.na(.), 0) %>%
+  mutate(n.correct = rowSums(.[3:21])) # sum up of the number of pictures estimated for each species
+
+## Estimation using the threshold for all species 
+for (i in 1:(nrow(ccr)-1)) {
+  species <- data %>%
+  sample_frac(size = ccr$r_T[20]) %>% # Sample the species records, according to the threshold calculated for all species together
+  group_by(species_conf)%>%
+  summarize(n = n()) %>%
+  mutate(prop = n/sum(n),  # calculate the proportion of the pictures, iniatially assigned as the target species, distributed according the correct species
+         n_correct = as.integer(prop*ccr$n[i])) %>% # estimation of the number of pictures for each species
+  select(c(1,4))
+  
+  data.correct.all <- data.correct.all %>%
+    left_join(species, by = "species_conf")  # paste the results in a data frame with all the results
+   colnames(data.correct.all)[(i+2)] <- paste(ccr$Species[i])
+  
+}
+  
+data.correct.all <- data.correct.all %>%
+  replace(is.na(.), 0) %>%
+  mutate(n.correct.all = rowSums(.[3:21]))  # sum up of the number of pictures estimated for each species
+
+(final.correct <- data.correct %>%
+  left_join(data.correct.all, by = "species_conf") %>% # join both tables with results
+  select(c('species_conf','n.x','n.correct', 'n.correct.all')) %>% # select the columns with the sum
+  rename('n' = 'n.x') %>%
+  mutate(n.diff = abs(n.correct - n),
+         n.diff.all = abs(n.correct.all - n)) # Calculate the difference between the real and the estimated number of pictures, using the threshold for each species isolated and for all the species together
+)
+
+write.csv(final.correct, file = "data.correction.csv")
+
+
+
+
+```
+
+
